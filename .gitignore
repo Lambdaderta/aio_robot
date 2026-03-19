@@ -205,3 +205,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Local project artifacts
+.DS_Store
+.venv_py39_backup/
+robot_agent_prototype_leonardo/.venv/
+robot_agent_prototype_leonardo/.venv_py39_backup/
+robot_agent_prototype_leonardo/frontend/node_modules/
+robot_agent_prototype_leonardo/frontend/dist/
