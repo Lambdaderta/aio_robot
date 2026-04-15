@@ -37,7 +37,7 @@ select {
 button,
 input,
 select {
-  border-radius: 10px;
+  border-radius: 8px;
 }
 
 button {
@@ -103,6 +103,21 @@ h1 {
   color: var(--muted);
 }
 
+.hardware-pill {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  padding: 10px 14px;
+  white-space: nowrap;
+}
+
+.hardware-pill.online {
+  border-color: #506d4c;
+  background: #243326;
+  color: #d3f4d0;
+}
+
 .mode-picker,
 .button-row,
 .preset-wrap {
@@ -135,13 +150,17 @@ h1 {
   align-items: start;
 }
 
+.vision-panel {
+  grid-column: span 2;
+}
+
 .chat-panel {
   grid-column: span 2;
 }
 
 .panel {
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--panel);
   overflow: hidden;
 }
@@ -183,7 +202,7 @@ h1 {
 .servo-row,
 .log-item {
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--panel-soft);
 }
 
@@ -414,6 +433,150 @@ input[type='range'] {
   justify-items: start;
 }
 
+.honest-note {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  line-height: 1.5;
+  padding: 12px;
+}
+
+.roadmap-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.roadmap-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.vision-stage {
+  display: grid;
+  gap: 12px;
+}
+
+.vision-viewer {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #111;
+}
+
+.vision-video,
+.vision-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.vision-canvas {
+  pointer-events: none;
+}
+
+.vision-controls {
+  display: grid;
+  gap: 10px;
+}
+
+.vision-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vision-select-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vision-select-row label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.vision-switch {
+  align-content: start;
+}
+
+.vision-switch input {
+  margin: 0;
+  accent-color: #8a8a8a;
+}
+
+.vision-status-grid,
+.vision-pose-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.vision-status-grid div,
+.vision-pose-grid div {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.vision-status-label {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.vision-hint {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  line-height: 1.5;
+  padding: 12px;
+}
+
+.vision-error {
+  border: 1px solid var(--danger-line);
+  border-radius: 8px;
+  background: var(--danger-bg);
+  color: #ffb8b8;
+  padding: 12px;
+}
+
+.roadmap-item span {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.roadmap-item p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .log-topline {
   flex-wrap: wrap;
   color: var(--muted);
@@ -448,6 +611,10 @@ input[type='range'] {
     grid-column: span 1;
   }
 
+  .vision-panel {
+    grid-column: span 1;
+  }
+
   .topbar {
     flex-direction: column;
   }
@@ -463,6 +630,12 @@ input[type='range'] {
   .preset-grid,
   .joints-grid,
   .composer {
+    grid-template-columns: 1fr;
+  }
+
+  .vision-select-row,
+  .vision-status-grid,
+  .vision-pose-grid {
     grid-template-columns: 1fr;
   }
 

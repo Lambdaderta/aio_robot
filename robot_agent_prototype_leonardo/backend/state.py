@@ -13,7 +13,7 @@ class AppState:
         self._robot_state = RobotState()
         self._logs: deque[LogEntry] = deque(maxlen=300)
         self._lock = Lock()
-        self.add_log("system", "Robot agent prototype initialized")
+        self.add_log("system", "Hardware-only robot control API initialized")
 
     def get_robot_state(self) -> RobotState:
         with self._lock:

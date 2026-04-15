@@ -1,26 +1,28 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
-const MODE_OPTIONS = ['demo', 'sim', 'hardware']
+import VisionControl from './VisionControl'
 
-const PRESET_COMMANDS = [
-  'Покажи статус',
-  'Перейди в домашнюю позицию',
-  'Открой захват',
-  'Подними руку',
-]
+const DEFAULT_PRESETS = ['HOME', 'LIFT', 'CYCLE', 'OPEN', 'CLOSE', 'WAVE', 'DEMO', 'PARK', 'LEFT', 'CENTER', 'RIGHT']
 
-const HARDWARE_PRESETS = [
-  ['HOME', 'Home'],
-  ['LIFT', 'Lift'],
-  ['CYCLE', 'Cycle'],
-  ['OPEN', 'Open'],
-  ['CLOSE', 'Close'],
-  ['WAVE', 'Wave'],
-  ['DEMO', 'Demo'],
-  ['PARK', 'Park'],
-  ['LEFT', 'Left'],
-  ['CENTER', 'Center'],
-  ['RIGHT', 'Right'],
+const PRESET_LABELS = {
+  HOME: 'Home',
+  LIFT: 'Lift',
+  CYCLE: 'Cycle',
+  OPEN: 'Open',
+  CLOSE: 'Close',
+  WAVE: 'Wave',
+  DEMO: 'Demo',
+  PARK: 'Park',
+  LEFT: 'Left',
+  CENTER: 'Center',
+  RIGHT: 'Right',
+}
+
+const AGENT_NEXT_STEPS = [
+  'Finish vision smoothing, deadband, and calibration tuning for base and shoulder.',
+  'Move pose processing off the main thread if camera latency starts to matter.',
+  'Add hand-open tracking for the gripper after the arm mapping is stable.',
+  'Split the CV loop into a separate service only if the local UI becomes too busy.',
 ]
 
 function Panel({ title, children, className = '' }) {
@@ -44,7 +46,7 @@ function Badge({ label, value, tone = 'default' }) {
 }
 
 function formatTs(ts) {
-  if (!ts) return '—'
+  if (!ts) return '-'
   return new Date(ts).toLocaleTimeString()
 }
 
@@ -73,28 +75,31 @@ function mergeSliderValues(jointLimits, robotState, prev, dirtyMap) {
 }
 
 function App() {
-  const [messages, setMessages] = useState([
+  const [activity, setActivity] = useState([
     {
       id: crypto.randomUUID(),
-      role: 'assistant',
-      text: 'Консоль готова. Можно подключать Arduino и управлять рукой вручную или командами.',
+      text: 'Hardware-only console ready. Connect Arduino before sending movement commands.',
+      steps: [],
     },
   ])
-  const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [robotState, setRobotState] = useState(null)
   const [logs, setLogs] = useState([])
   const [jointLimits, setJointLimits] = useState({})
-  const [currentMode, setCurrentMode] = useState('demo')
+  const [supportedPresets, setSupportedPresets] = useState(DEFAULT_PRESETS)
   const [sliderValues, setSliderValues] = useState({})
   const [sliderDirty, setSliderDirty] = useState({})
   const [ports, setPorts] = useState([])
   const [selectedPort, setSelectedPort] = useState('')
   const [baudRate, setBaudRate] = useState(115200)
   const [manualBusy, setManualBusy] = useState(false)
+  const [visionControlActive, setVisionControlActive] = useState(false)
 
   const sliderDirtyRef = useRef({})
+
+  function appendActivity(text, steps = []) {
+    setActivity((prev) => [...prev, { id: crypto.randomUUID(), text, steps }])
+  }
 
   function updateDirtyState(updater) {
     setSliderDirty((prev) => {
@@ -128,9 +133,9 @@ function App() {
       if (!response.ok) throw new Error('Failed to fetch status')
       const data = await response.json()
       setRobotState(data.robot_state)
-      setLogs(data.logs)
-      setJointLimits(data.joint_limits)
-      setCurrentMode(data.robot_state.mode)
+      setLogs(data.logs || [])
+      setJointLimits(data.joint_limits || {})
+      setSupportedPresets(data.supported_presets?.length ? data.supported_presets : DEFAULT_PRESETS)
       setSliderValues((prev) =>
         mergeSliderValues(data.joint_limits, data.robot_state, prev, sliderDirtyRef.current)
       )
@@ -145,9 +150,7 @@ function App() {
       if (!response.ok) throw new Error('Failed to fetch serial ports')
       const data = await response.json()
       setPorts(data.ports || [])
-      if (!selectedPort && data.ports?.length) {
-        setSelectedPort(data.ports[0].device)
-      }
+      setSelectedPort((current) => current || data.ports?.[0]?.device || '')
     } catch (err) {
       setError(err.message)
     }
@@ -164,62 +167,6 @@ function App() {
     }, 1500)
     return () => window.clearInterval(interval)
   }, [])
-
-  async function handleModeChange(mode) {
-    setCurrentMode(mode)
-    setError('')
-    try {
-      const response = await fetch('/api/mode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode }),
-      })
-      if (!response.ok) throw new Error('Failed to switch mode')
-      const data = await response.json()
-      setRobotState(data.robot_state)
-      await fetchStatus()
-    } catch (err) {
-      setError(err.message)
-    }
-  }
-
-  async function handleSend(messageOverride) {
-    const text = (messageOverride ?? input).trim()
-    if (!text) return
-    setLoading(true)
-    setError('')
-
-    const userMessage = { id: crypto.randomUUID(), role: 'user', text }
-    setMessages((prev) => [...prev, userMessage])
-    setInput('')
-
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
-      })
-      if (!response.ok) throw new Error('Failed to send command')
-      const data = await response.json()
-      setRobotState(data.robot_state)
-      setLogs(data.logs)
-      clearAllDirty()
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          text: data.agent_response.user_visible_text,
-          steps: data.execution_steps,
-        },
-      ])
-      await fetchStatus()
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }
 
   async function callManualApi(path, payload, successText, dirtyReset = null) {
     setManualBusy(true)
@@ -242,14 +189,17 @@ function App() {
         throw new Error(data.detail || 'Manual action failed')
       }
 
-      setRobotState(data.robot_state)
-      setLogs(data.logs)
-      setMessages((prev) => [
-        ...prev,
-        { id: crypto.randomUUID(), role: 'assistant', text: successText, steps: data.steps || [] },
-      ])
+      const steps = data.steps || []
+      const failedStep = steps.find((step) => step.status === 'blocked' || step.status === 'failed')
+      const activityText = failedStep ? `Action did not run: ${failedStep.details}` : successText
 
-      if (dirtyReset === 'all') {
+      setRobotState(data.robot_state)
+      setLogs(data.logs || [])
+      appendActivity(activityText, steps)
+
+      if (failedStep) {
+        setError(failedStep.details)
+      } else if (dirtyReset === 'all') {
         clearAllDirty()
       } else if (Array.isArray(dirtyReset)) {
         clearDirtyJoints(dirtyReset)
@@ -284,7 +234,7 @@ function App() {
     await callManualApi(
       '/api/manual/joint',
       { joint_name: jointName, angle },
-      `Sent ${jointName} -> ${angle}°`,
+      `Sent ${jointName} -> ${angle} deg`,
       [jointName]
     )
   }
@@ -305,15 +255,47 @@ function App() {
     await callManualApi('/api/manual/stop', {}, 'Stop signal sent', 'all')
   }
 
-  const stateBadges = useMemo(() => {
-    if (!robotState) return []
-    return [
-      ['Mode', robotState.mode],
-      ['Hardware', robotState.hardware_connected ? 'connected' : 'disconnected'],
-      ['Controller', robotState.controller_state],
-      ['Pose', robotState.active_pose],
-    ]
-  }, [robotState])
+  async function submitVisionPose(joints) {
+    setError('')
+    try {
+      const response = await fetch('/api/manual/pose', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ joints }),
+      })
+
+      let data = {}
+      try {
+        data = await response.json()
+      } catch {
+        data = {}
+      }
+
+      if (!response.ok) {
+        throw new Error(data.detail || 'Vision pose failed')
+      }
+
+      setRobotState(data.robot_state)
+      setLogs(data.logs || [])
+      return data
+    } catch (err) {
+      setError(err.message)
+      throw err
+    }
+  }
+
+  const hardwareReady = Boolean(robotState?.hardware_connected)
+  const visionLocked = visionControlActive
+  const stateBadges = robotState
+    ? [
+        ['Hardware', hardwareReady ? 'connected' : 'offline'],
+        ['Controller', robotState.controller_state],
+        ['Telemetry', robotState.telemetry_source],
+        ['Pose', robotState.active_pose],
+      ]
+    : []
 
   return (
     <div className="app-shell">
@@ -321,18 +303,10 @@ function App() {
         <div>
           <div className="eyebrow">Local Leonardo Control</div>
           <h1>Robot Arm Console</h1>
-          <p className="subtle">Минимальный интерфейс для serial, пресетов и ручного управления сервами.</p>
+          <p className="subtle">Честный hardware-only интерфейс: serial, пресеты и ручное управление сервами.</p>
         </div>
-        <div className="mode-picker">
-          {MODE_OPTIONS.map((mode) => (
-            <button
-              key={mode}
-              className={mode === currentMode ? 'mode-button active' : 'mode-button'}
-              onClick={() => handleModeChange(mode)}
-            >
-              {mode}
-            </button>
-          ))}
+        <div className={hardwareReady ? 'hardware-pill online' : 'hardware-pill'}>
+          {hardwareReady ? 'Arduino connected' : 'Arduino offline'}
         </div>
       </header>
 
@@ -357,16 +331,16 @@ function App() {
                 {Object.entries(robotState.joints).map(([joint, value]) => (
                   <div key={joint} className="joint-item">
                     <span>{joint}</span>
-                    <strong>{value}°</strong>
+                    <strong>{value} deg</strong>
                   </div>
                 ))}
               </div>
 
               <div className="status-grid-mini">
-                <div>Port: <strong>{robotState.hardware_port || '—'}</strong></div>
+                <div>Port: <strong>{robotState.hardware_port || '-'}</strong></div>
                 <div>Baud: <strong>{robotState.baud_rate}</strong></div>
                 <div>Firmware: <strong>{robotState.firmware_ready ? 'ready' : 'not ready'}</strong></div>
-                <div>Serial: <strong>{robotState.last_serial_message || '—'}</strong></div>
+                <div>Serial: <strong>{robotState.last_serial_message || '-'}</strong></div>
               </div>
 
               {robotState.last_error ? <div className="last-error">Last error: {robotState.last_error}</div> : null}
@@ -383,7 +357,7 @@ function App() {
                   <option value="">Select port...</option>
                   {ports.map((port) => (
                     <option key={port.device} value={port.device}>
-                      {port.device} — {port.description}
+                      {port.device} - {port.description}
                     </option>
                   ))}
                 </select>
@@ -398,7 +372,7 @@ function App() {
             <div className="button-row">
               <button className="secondary-button" onClick={fetchPorts}>Refresh ports</button>
               <button onClick={handleConnectHardware} disabled={manualBusy}>Connect</button>
-              <button className="danger-button" onClick={handleDisconnectHardware} disabled={manualBusy}>Disconnect</button>
+              <button className="danger-button" onClick={handleDisconnectHardware} disabled={manualBusy || !hardwareReady}>Disconnect</button>
             </div>
 
             <div className="port-list">
@@ -412,14 +386,30 @@ function App() {
           </div>
         </Panel>
 
+        <VisionControl
+          robotState={robotState}
+          jointLimits={jointLimits}
+          onSendPose={submitVisionPose}
+          onControlStateChange={setVisionControlActive}
+          onTrace={appendActivity}
+        />
+
         <Panel title="Manual Control">
           <div className="servo-stack">
+            {visionLocked ? (
+              <div className="muted-block">Vision is steering base and shoulder. Manual sends for those joints are paused.</div>
+            ) : null}
+
+            {!hardwareReady ? (
+              <div className="muted-block">Connect Arduino first. Movement buttons are disabled while offline.</div>
+            ) : null}
+
             {Object.entries(jointLimits).map(([joint, limits]) => (
               <div key={joint} className="servo-row">
                 <div className="servo-topline">
                   <strong>{joint}</strong>
                   <div className="servo-readout">
-                    <span>{sliderValues[joint] ?? limits.default_angle}°</span>
+                    <span>{sliderValues[joint] ?? limits.default_angle} deg</span>
                     <span className={sliderDirty[joint] ? 'draft-state dirty' : 'draft-state'}>
                       {sliderDirty[joint] ? 'draft' : 'live'}
                     </span>
@@ -440,15 +430,21 @@ function App() {
                 />
 
                 <div className="servo-actions">
-                  <span>{limits.min_angle}° to {limits.max_angle}°</span>
-                  <span className="muted-inline">robot: {robotState?.joints?.[joint] ?? limits.default_angle}°</span>
-                  <button className="tiny-button" onClick={() => handleSendJoint(joint)} disabled={manualBusy}>Send</button>
+                  <span>{limits.min_angle} deg to {limits.max_angle} deg</span>
+                  <span className="muted-inline">robot: {robotState?.joints?.[joint] ?? limits.default_angle} deg</span>
+                  <button
+                    className="tiny-button"
+                    onClick={() => handleSendJoint(joint)}
+                    disabled={manualBusy || !hardwareReady || (visionLocked && (joint === 'base' || joint === 'shoulder'))}
+                  >
+                    Send
+                  </button>
                 </div>
               </div>
             ))}
 
             <div className="button-row">
-              <button onClick={handleApplyPose} disabled={manualBusy}>Apply full pose</button>
+              <button onClick={handleApplyPose} disabled={manualBusy || !hardwareReady || visionLocked}>Apply full pose</button>
               <button
                 className="secondary-button"
                 onClick={() => {
@@ -458,32 +454,46 @@ function App() {
               >
                 Reset sliders
               </button>
-              <button className="danger-button" onClick={handleStop} disabled={manualBusy}>Stop</button>
+              <button className="danger-button" onClick={handleStop} disabled={manualBusy || !hardwareReady}>Stop</button>
             </div>
           </div>
         </Panel>
 
-        <Panel title="Presets">
+        <Panel title="Arduino Presets">
           <div className="preset-grid">
-            {HARDWARE_PRESETS.map(([preset, label]) => (
-              <button key={preset} className="preset-card" onClick={() => handleRunPreset(preset)} disabled={manualBusy}>
-                <strong>{label}</strong>
+            {supportedPresets.map((preset) => (
+              <button key={preset} className="preset-card" onClick={() => handleRunPreset(preset)} disabled={manualBusy || !hardwareReady}>
+                <strong>{PRESET_LABELS[preset] || preset}</strong>
                 <span>{preset}</span>
               </button>
             ))}
           </div>
         </Panel>
 
-        <Panel title="Commands" className="chat-panel">
+        <Panel title="Agent Layer">
+          <div className="honest-note">
+            Псевдо-чат удален. Реальный агент должен подключаться отдельным сервисом с явными tool calls, журналом решений и safety-gate перед каждым движением.
+          </div>
+          <div className="roadmap-list">
+            {AGENT_NEXT_STEPS.map((step, index) => (
+              <div key={step} className="roadmap-item">
+                <span>{index + 1}</span>
+                <p>{step}</p>
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel title="Activity" className="chat-panel">
           <div className="messages">
-            {messages.map((message) => (
-              <div key={message.id} className={`message ${message.role}`}>
-                <div className="message-role">{message.role === 'assistant' ? 'Agent' : 'You'}</div>
-                <div className="message-text">{message.text}</div>
-                {message.steps?.length ? (
+            {activity.map((item) => (
+              <div key={item.id} className="message assistant">
+                <div className="message-role">Console</div>
+                <div className="message-text">{item.text}</div>
+                {item.steps?.length ? (
                   <div className="step-list">
-                    {message.steps.map((step, index) => (
-                      <div key={`${message.id}-${index}`} className={`step ${step.status}`}>
+                    {item.steps.map((step, index) => (
+                      <div key={`${item.id}-${index}`} className={`step ${step.status}`}>
                         <strong>{step.step_name}</strong>
                         <span>{step.details}</span>
                       </div>
@@ -491,26 +501,6 @@ function App() {
                   </div>
                 ) : null}
               </div>
-            ))}
-          </div>
-
-          <div className="composer">
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && !loading && handleSend()}
-              placeholder="Например: home, открой захват, подними руку"
-            />
-            <button onClick={() => handleSend()} disabled={loading}>
-              {loading ? '...' : 'Send'}
-            </button>
-          </div>
-
-          <div className="preset-wrap">
-            {PRESET_COMMANDS.map((command) => (
-              <button key={command} className="chip" onClick={() => handleSend(command)} disabled={loading}>
-                {command}
-              </button>
             ))}
           </div>
         </Panel>
