@@ -10,6 +10,11 @@ import time
 import webbrowser
 from pathlib import Path
 
+try:
+    from .env_loader import load_local_env
+except ImportError:  # pragma: no cover
+    from env_loader import load_local_env
+
 ROOT = Path(__file__).resolve().parent
 FRONTEND_DIR = ROOT / "frontend"
 BACKEND_HOST = "127.0.0.1"
@@ -76,6 +81,14 @@ def start_frontend() -> subprocess.Popen:
     return subprocess.Popen(cmd, cwd=FRONTEND_DIR)
 
 
+def start_telegram_bot() -> subprocess.Popen:
+    python = sys.executable
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT)
+    cmd = [python, "telegram_bot.py"]
+    return subprocess.Popen(cmd, cwd=ROOT, env=env)
+
+
 def terminate(processes: list[subprocess.Popen]) -> None:
     for proc in processes:
         if proc.poll() is None:
@@ -99,10 +112,13 @@ def terminate(processes: list[subprocess.Popen]) -> None:
 
 
 def main() -> None:
+    load_local_env()
+
     parser = argparse.ArgumentParser(description="Run Robot Agent Prototype")
     parser.add_argument("--setup", action="store_true", help="Install Python and frontend dependencies")
     parser.add_argument("--no-browser", action="store_true", help="Do not open the frontend automatically")
     parser.add_argument("--reload-backend", action="store_true", help="Enable uvicorn autoreload for backend development")
+    parser.add_argument("--telegram-bot", action="store_true", help="Start the Telegram bot if AIO_TELEGRAM_BOT_TOKEN is set")
     args = parser.parse_args()
 
     if sys.version_info < MIN_PYTHON:
@@ -141,11 +157,21 @@ def main() -> None:
     frontend = start_frontend()
     processes.append(frontend)
 
+    if args.telegram_bot:
+        if os.environ.get("AIO_TELEGRAM_BOT_TOKEN", "").strip():
+            print("Starting Telegram bot...")
+            telegram_bot = start_telegram_bot()
+            processes.append(telegram_bot)
+        else:
+            print("Telegram bot was requested, but AIO_TELEGRAM_BOT_TOKEN is not set. Skipping bot startup.")
+
     frontend_url = f"http://{FRONTEND_HOST}:{FRONTEND_PORT}"
     backend_url = f"http://{BACKEND_HOST}:{BACKEND_PORT}"
 
     print(f"\nFrontend: {frontend_url}")
     print(f"Backend : {backend_url}")
+    if args.telegram_bot and os.environ.get("AIO_TELEGRAM_BOT_TOKEN", "").strip():
+        print("Telegram bot: enabled")
     print("Press Ctrl+C to stop both services.")
 
     if not args.no_browser:

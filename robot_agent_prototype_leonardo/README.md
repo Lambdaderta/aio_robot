@@ -1,63 +1,47 @@
-# Robot Arm Hardware Console — Leonardo build
+# AIO Reference Implementation: Arduino Leonardo Arm
 
-Этот проект теперь намеренно урезан до честного hardware-only ядра. В нем больше нет `demo`/`sim` режимов, псевдо-чата, intent parser и "агента", который только имитирует работу.
+This directory contains the current reference implementation of AIO.
 
-Что реально работает:
+It is the concrete stack that powers the existing robotic arm setup, but it is also the working baseline for a more general local agent system that can later support other robots, other transports, and future perception-and-action models.
 
-- FastAPI backend открывает serial-порт к Arduino Leonardo.
-- UI подключает порт, показывает статус и логи.
-- Ручные команды отправляют реальные `SET joint angle` в Arduino.
-- Presets отправляют реальные `PRESET NAME` в Arduino.
-- `STOP` отправляет реальный `STOP`.
-- Если Arduino не подключена, движение блокируется, а не симулируется.
-- В браузере есть камера-визор на `MediaPipe Pose`, который переводит движение руки в `base` и `shoulder`.
+## What This Implementation Includes
 
-План настоящей агентной системы лежит здесь:
+- FastAPI backend for robot state, hardware connection, chat runtime, and assistant tools
+- React/Vite frontend for chat, hardware control, vision control, and LM Studio setup
+- LM Studio integration for local LLM inference and tool calling
+- Telegram bot that reuses the same assistant backend and robot tools
+- stdio MCP server for external clients such as Codex or Claude
+- Arduino Leonardo serial protocol and reference firmware
 
-- [`docs/AGENT_SYSTEM_PLAN.md`](docs/AGENT_SYSTEM_PLAN.md)
+## Current Capabilities
 
-## Текущая механика
+- connect to Arduino over serial
+- control `base`, `shoulder`, and `gripper` in calibrated logical angles
+- use backend-calibrated presets such as `HOME`, `LIFT`, `PARK`, `LEFT`, `CENTER`, and `RIGHT`
+- route local LLM tool calls into real robot actions
+- accept web chat input, Telegram text, Telegram photos, and Telegram voice messages
+- expose robot actions and runtime controls through MCP
+- run browser-based arm tracking for `base` and `shoulder`
 
-Arduino Leonardo sketch рассчитан на 3 сервопривода:
+## Runtime Components
 
-- `base` -> D3, диапазон 0..180
-- `gripper` -> D5, диапазон 0..90
-- `shoulder` -> D13, диапазон 0..180
+The current implementation is split into five practical layers:
 
-Если сейчас физически работают только 2 оси, оставь `gripper` неподключенным или не отправляй на него команды до калибровки.
+1. `backend/`
+   The control layer, FastAPI API, shared tool layer, chat runtime config, and LM Studio process helpers.
+2. `frontend/`
+   The web client for direct human interaction, manual control, and browser vision.
+3. `mcp_server.py`
+   A stdio MCP bridge for external agent clients.
+4. `telegram_bot.py`
+   A Telegram interface that reuses the same backend and safe tool dispatch layer.
+5. `arduino/robot_arm_serial_controller/`
+   The current firmware for the reference robotic arm.
 
-## Vision MVP
-
-Сейчас vision-часть сделана как браузерный прототип:
-
-- камера берется через `getUserMedia()` в frontend
-- поза вычисляется через `@mediapipe/tasks-vision`
-- для старта используется официальный `pose_landmarker_lite.task`
-- в робот отправляются только `base` и `shoulder`
-- `gripper` пока остается вне vision-пути
-
-Как это использовать:
-
-1. Подними приложение.
-2. Открой камеру в новом блоке vision.
-3. Поставь руку в нейтральную позу, когда она смотрит вверх.
-4. Нажми `Capture calibration` в этой позе.
-5. Включи `Send to robot`.
-6. Двигай рукой влево/вправо и вверх/вниз, чтобы менять `base` и `shoulder`.
-
-Маппинг сейчас намеренно простой:
-
-- калибровка задает точку `90/90`
-- смещение руки по горизонтали двигает `base`
-- смещение руки по вертикали двигает `shoulder`
-- для стабильности есть сглаживание и deadband
-
-Если хочешь расширять дальше, следующий логичный шаг после этого MVP - вынести обработку в отдельный worker и потом уже добавлять логику для gripper.
-
-## Быстрый старт
+## Quick Start
 
 ```bash
-~/.pyenv/versions/3.12.12/bin/python -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
@@ -65,190 +49,153 @@ cd frontend && npm install && cd ..
 python run.py
 ```
 
-Если виртуальное окружение уже создано:
-
-```bash
-source .venv/bin/activate
-python run.py
-```
-
-Адреса:
+After startup:
 
 - frontend: `http://127.0.0.1:5173`
 - backend: `http://127.0.0.1:8000`
-- docs: `http://127.0.0.1:8000/docs`
+- API docs: `http://127.0.0.1:8000/docs`
 
-Важно:
+## Running With Telegram
 
-- backend нужно запускать на Python 3.10+
-- `python run.py` поднимает backend без `--reload`, чтобы избежать проблем со слежением за файлами
-- frontend работает через Vite proxy и обращается к backend по `/api/*`
+The project supports a local `.env` file. A template lives in [.env.example](/Users/lambda/projects/aio_robot/robot_agent_prototype_leonardo/.env.example:1).
 
-## Arduino sketch
+To run the Telegram bot next to the backend and frontend:
 
-Файл прошивки:
-
-```text
-arduino/robot_arm_serial_controller/robot_arm_serial_controller.ino
+```bash
+source .venv/bin/activate
+python run.py --telegram-bot
 ```
 
-Прошивка загружается один раз. После этого FastAPI держит serial-порт открытым и отправляет команды:
+Useful Telegram commands:
 
-```text
-PING
-STATUS
-SET base 120
-SET shoulder 70
-SET gripper 30
-PRESET HOME
-PRESET LIFT
-PRESET OPEN
-PRESET CLOSE
-PRESET LEFT
-PRESET CENTER
-PRESET RIGHT
-STOP
+- `/start` — start a fresh conversation
+- `/reset` — clear Telegram-side assistant history for the current chat
+- `/hardware` or `/ports` — list serial ports and use buttons to connect or disconnect Arduino
+
+## Running With MCP
+
+From the project directory:
+
+```bash
+source .venv/bin/activate
+python mcp_server.py
 ```
 
-Sketch также содержит `CYCLE`, `WAVE`, `DEMO` и `PARK`. Они реальны, потому что выполняются на Arduino, но для первых тестов безопаснее начинать с `HOME`, `SET` по одному joint и `STOP`.
+From the repository root:
 
-Текущая версия прошивки работает в `safe_start` режиме:
-
-- после включения сервы не attach'ятся автоматически
-- первая команда движения attach'ит только нужную серву
-- это уменьшает риск неожиданного рывка сразу после подачи питания
-
-Новая прошивка нужна только если меняются:
-
-- пины
-- диапазоны
-- пресеты
-- serial-протокол
-
-## Где менять конфиг под свою механику
-
-### 1. Пины и диапазоны на Arduino
-
-Открой `arduino/robot_arm_serial_controller/robot_arm_serial_controller.ino` и найди блок:
-
-```cpp
-JointConfig JOINTS[] = {
-  {"base", 3, 0, 180, 0, 180, 90},
-  {"gripper", 5, 0, 90, 0, 90, 45},
-  {"shoulder", 13, 0, 180, 0, 180, 90},
-};
+```bash
+source robot_agent_prototype_leonardo/.venv/bin/activate
+python -m robot_agent_prototype_leonardo.mcp_server
 ```
 
-Формат строки:
+The MCP bridge talks to the existing backend instead of opening serial on its own. This keeps one control authority for the robot and avoids multiple processes fighting over the same Arduino connection.
 
-```cpp
-{"name", pin, logicalMin, logicalMax, servoMin, servoMax, defaultAngle}
+## LM Studio
+
+The currently tested model in this repository is:
+
+- `google/gemma-4-e4b`
+
+Start the LM Studio server and load the model:
+
+```bash
+~/.lmstudio/bin/lms server start
+~/.lmstudio/bin/lms load google/gemma-4-e4b
 ```
 
-Если сервопривод крутится наоборот, поменяй местами `servoMin` и `servoMax`.
+The frontend expects:
 
-Пример инверсии:
+- Base URL: `http://127.0.0.1:1234/v1`
+- Model identifier: `google/gemma-4-e4b`
 
-```cpp
-{"base", 3, 0, 180, 180, 0, 90}
+Notes:
+
+- Telegram photo support depends on the loaded model supporting image input.
+- Telegram voice transcription depends on `faster-whisper`.
+- Voice replies depend on macOS `say` and `afconvert`.
+
+## Reference Robot Model
+
+The current control service is calibrated for a specific reference arm.
+
+Important details:
+
+- `base` lives in logical angles `-90..90`
+- logical `base=0` is the upright center position
+- `shoulder=90` is the current upright reference
+- all UI controls, assistant tools, Telegram actions, and MCP robot controls work in logical angles
+- raw Arduino angles are translated inside [backend/control/service.py](/Users/lambda/projects/aio_robot/robot_agent_prototype_leonardo/backend/control/service.py:1)
+
+Current calibration assumptions:
+
+- hardware `base=30` maps to logical `0`
+- hardware `base=0` maps to logical `-90`
+- hardware `base=180` maps to logical `90`
+
+## Hardware Bring-Up Checklist
+
+When using the current Leonardo arm:
+
+1. Connect the board over USB.
+2. Open the web UI or Telegram `/hardware`.
+3. Select the serial port and connect at `115200`.
+4. Confirm that `base=0` corresponds to the upright center.
+5. Confirm that `shoulder=90` matches the expected neutral pose.
+6. Test a small `base` move before trying presets or autonomous control.
+7. Start LM Studio and load a model before using chat, Telegram, or MCP assistants.
+
+## Tests
+
+Run the test suite from the repository root:
+
+```bash
+source robot_agent_prototype_leonardo/.venv/bin/activate
+python -m unittest discover -s robot_agent_prototype_leonardo/tests -v
 ```
 
-### 2. Лимиты на backend
+Or from this directory:
 
-Открой `backend/control/service.py` и синхронно поменяй `JOINT_LIMITS`.
-
-### 3. Начальные значения UI
-
-Открой `backend/models.py` и синхронно поменяй `RobotState.joints`.
-
-## Ручная проверка API
-
-### Получить статус
-
-```text
-GET /api/status
+```bash
+source .venv/bin/activate
+PYTHONPATH=.. python -m unittest discover -s tests -v
 ```
 
-### Посмотреть serial-порты
+The current tests cover:
 
-```text
-GET /api/hardware/ports
-```
+- logical-to-hardware angle mapping
+- backend tool guardrails
+- chat tool-call extraction and tool loop
+- MCP initialize, tools/list, and tool dispatch
+- Telegram assistant runtime tool loop and image message handling
 
-### Подключиться к Arduino
+## Key Files
 
-```text
-POST /api/hardware/connect
-```
+- [backend/main.py](/Users/lambda/projects/aio_robot/robot_agent_prototype_leonardo/backend/main.py:1) — HTTP API surface
+- [backend/control/service.py](/Users/lambda/projects/aio_robot/robot_agent_prototype_leonardo/backend/control/service.py:1) — logical robot control model
+- [backend/control/serial_adapter.py](/Users/lambda/projects/aio_robot/robot_agent_prototype_leonardo/backend/control/serial_adapter.py:1) — Leonardo serial transport
+- [backend/chat_service.py](/Users/lambda/projects/aio_robot/robot_agent_prototype_leonardo/backend/chat_service.py:1) — local LLM tool loop used by the web app
+- [frontend/src/App.jsx](/Users/lambda/projects/aio_robot/robot_agent_prototype_leonardo/frontend/src/App.jsx:1) — main web client
+- [frontend/src/VisionControl.jsx](/Users/lambda/projects/aio_robot/robot_agent_prototype_leonardo/frontend/src/VisionControl.jsx:1) — vision tab and send loop
+- [mcp_server.py](/Users/lambda/projects/aio_robot/robot_agent_prototype_leonardo/mcp_server.py:1) — external agent bridge
+- [telegram_bot.py](/Users/lambda/projects/aio_robot/robot_agent_prototype_leonardo/telegram_bot.py:1) — Telegram runtime
 
-```json
-{
-  "port": "/dev/cu.usbmodemXXXX",
-  "baud_rate": 115200
-}
-```
+## Adapting This Stack To Another Robot
 
-### Двинуть сустав
+The fastest way to make AIO work with another robot is not to rewrite the assistant layer. The right place to adapt is the robot control interface.
 
-```text
-POST /api/manual/joint
-```
+Use:
 
-```json
-{
-  "joint_name": "base",
-  "angle": 120
-}
-```
+- [docs/ROBOT_API_ADAPTER_GUIDE.md](/Users/lambda/projects/aio_robot/docs/ROBOT_API_ADAPTER_GUIDE.md:1)
+- [docs/ARCHITECTURE.md](/Users/lambda/projects/aio_robot/docs/ARCHITECTURE.md:1)
 
-### Применить позу
+Those guides explain which files define the current adapter, what needs to change, and how to keep the rest of the stack unchanged.
 
-```text
-POST /api/manual/pose
-```
+## Known Limits Of The Reference Implementation
 
-```json
-{
-  "joints": {
-    "base": 90,
-    "shoulder": 120,
-    "gripper": 45
-  }
-}
-```
+- the current firmware and control model are still tied to the Leonardo arm
+- browser vision currently maps only `base` and `shoulder`
+- the assistant layer is tool-based, not a trained VLA policy
+- real hardware tests are still manual and are not part of CI
+- Telegram photo support depends on the selected local model
 
-### Запустить Arduino preset
-
-```text
-POST /api/manual/preset/HOME
-```
-
-### Остановить движение
-
-```text
-POST /api/manual/stop
-```
-
-## Безопасный первый запуск
-
-1. Залей прошивку.
-2. Подключи питание серв правильно: не питай силовые сервы от Arduino 5V.
-3. Сделай общую землю между отдельным питанием серв и Arduino.
-4. Проверь, что Arduino отвечает на `PING` и `STATUS`.
-5. Подключи веб-интерфейс.
-6. Сначала используй `HOME`.
-7. Потом двигай по одному суставу маленькими шагами.
-8. Только после этого используй `Apply full pose`.
-9. Держи `STOP` под рукой.
-
-## Что удалено
-
-- `/api/chat`
-- `/api/mode`
-- `demo`/`sim` execution modes
-- `backend/agent.py`
-- `backend/router.py`
-- `backend/skills/robot_arm.py`
-- frontend pseudo-command panel
-
-Следующий шаг — не возвращать фейковый чат, а добавить отдельный agent service с tool allowlist, camera/CV tools, safety-gate и видимым trace каждого решения.
+This is a reference implementation, not the final scope of AIO. The current value of the repository is that the assistant layer, hardware layer, and external integrations are already separated enough to evolve toward a broader robotics platform.

@@ -6,9 +6,10 @@ export const VISION_MODEL_URL =
 export const VISION_MIN_VISIBILITY = 0.45
 export const VISION_BASE_GAIN = 100
 export const VISION_SHOULDER_GAIN = 100
-export const VISION_SEND_DEADBAND_DEG = 2.5
-export const VISION_SEND_INTERVAL_MS = 800
+export const VISION_SEND_DEADBAND_DEG = 0.8
+export const VISION_SEND_INTERVAL_MS = 180
 export const VISION_DETECT_INTERVAL_MS = 80
+export const VISION_STRAIGHT_ARM_DEADZONE_DEG = 18
 
 const ARM_INDEXES = {
   left: {
@@ -37,6 +38,28 @@ export function distance(a, b) {
   return Math.hypot((a.x ?? 0) - (b.x ?? 0), (a.y ?? 0) - (b.y ?? 0))
 }
 
+function toDegrees(radians) {
+  return (radians * 180) / Math.PI
+}
+
+function angleAtPoint(a, vertex, c) {
+  if (!a || !vertex || !c) return 0
+  const abx = (a.x ?? 0) - (vertex.x ?? 0)
+  const aby = (a.y ?? 0) - (vertex.y ?? 0)
+  const cbx = (c.x ?? 0) - (vertex.x ?? 0)
+  const cby = (c.y ?? 0) - (vertex.y ?? 0)
+  const abMag = Math.hypot(abx, aby)
+  const cbMag = Math.hypot(cbx, cby)
+  if (!abMag || !cbMag) return 0
+  const cosine = clamp((abx * cbx + aby * cby) / (abMag * cbMag), -1, 1)
+  return toDegrees(Math.acos(cosine))
+}
+
+function armDirectionFromVertical(shoulder, wrist) {
+  if (!shoulder || !wrist) return 0
+  return toDegrees(Math.atan2((wrist.x ?? 0) - (shoulder.x ?? 0), (shoulder.y ?? 0) - (wrist.y ?? 0)))
+}
+
 export function normalizeLandmark(landmark) {
   return {
     x: Number(landmark?.x ?? 0),
@@ -61,9 +84,11 @@ export function createVisionCalibration(landmarks, side, robotState) {
 
   return {
     side: side === 'left' ? 'left' : 'right',
-    base: Number(robotState?.joints?.base ?? 90),
+    base: Number(robotState?.joints?.base ?? 0),
     shoulder: Number(robotState?.joints?.shoulder ?? 90),
     armSpan,
+    armDirectionDeg: round(armDirectionFromVertical(arm.shoulder, arm.wrist), 1),
+    elbowAngleDeg: round(angleAtPoint(arm.shoulder, arm.elbow, arm.wrist), 1),
     landmarks: arm,
     shoulderPoint: arm.shoulder,
     elbowPoint: arm.elbow,
@@ -95,21 +120,21 @@ export function mapArmLandmarksToPose(landmarks, calibration, side, jointLimits 
   }
 
   const armSpan = calibration.armSpan || distance(calibration.shoulderPoint, calibration.wristPoint) || 0.0001
-  const baseOffset =
-    ((arm.elbow.x - calibration.elbowPoint.x) + (arm.wrist.x - calibration.wristPoint.x)) / (2 * armSpan)
-  const shoulderOffset =
-    ((calibration.elbowPoint.y - arm.elbow.y) + (calibration.wristPoint.y - arm.wrist.y)) / (2 * armSpan)
+  const armDirectionDeg = armDirectionFromVertical(arm.shoulder, arm.wrist)
+  const elbowAngleDeg = angleAtPoint(arm.shoulder, arm.elbow, arm.wrist)
+  const elbowBendDeg = Math.max(0, 180 - elbowAngleDeg)
+  const effectiveElbowBendDeg = elbowBendDeg <= VISION_STRAIGHT_ARM_DEADZONE_DEG ? 0 : elbowBendDeg
 
-  const baseLimits = jointLimits.base || { min_angle: 0, max_angle: 180 }
+  const baseLimits = jointLimits.base || { min_angle: -90, max_angle: 90 }
   const shoulderLimits = jointLimits.shoulder || { min_angle: 0, max_angle: 180 }
 
   const base = clamp(
-    round(calibration.base + baseOffset * VISION_BASE_GAIN, 1),
+    round(calibration.base + (armDirectionDeg - (calibration.armDirectionDeg ?? 0)), 1),
     baseLimits.min_angle,
     baseLimits.max_angle
   )
   const shoulder = clamp(
-    round(calibration.shoulder + shoulderOffset * VISION_SHOULDER_GAIN, 1),
+    round(calibration.shoulder - effectiveElbowBendDeg, 1),
     shoulderLimits.min_angle,
     shoulderLimits.max_angle
   )
@@ -120,8 +145,9 @@ export function mapArmLandmarksToPose(landmarks, calibration, side, jointLimits 
     confidence: round(visibility, 2),
     base,
     shoulder,
-    baseOffset: round(baseOffset, 3),
-    shoulderOffset: round(shoulderOffset, 3),
+    armDirectionDeg: round(armDirectionDeg, 1),
+    elbowAngleDeg: round(elbowAngleDeg, 1),
+    elbowBendDeg: round(elbowBendDeg, 1),
     armSpan: round(armSpan, 3),
     landmarks: arm,
   }
@@ -209,7 +235,7 @@ export function drawVisionOverlay(canvas, video, pose, calibration) {
   if (pose?.calibrated) {
     drawLabel(
       ctx,
-      `base ${pose.base.toFixed(1)} shoulder ${pose.shoulder.toFixed(1)} conf ${pose.confidence.toFixed(2)}`,
+      `base ${pose.base.toFixed(1)} shoulder ${pose.shoulder.toFixed(1)} arm ${pose.armDirectionDeg.toFixed(1)} bend ${pose.elbowBendDeg.toFixed(1)}`,
       16,
       28
     )

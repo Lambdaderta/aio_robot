@@ -61,14 +61,40 @@ class SerialAdapter:
                 self._serial = None
                 raise SerialAdapterError(f"Failed to open serial port {port}: {exc}") from exc
 
+            # Leonardo-class boards often reset when the serial port is opened,
+            # so the first read may catch the boot banner instead of the reply.
             time.sleep(2.0)
             self._serial.reset_input_buffer()
             self._serial.reset_output_buffer()
 
+            last_error: str | None = None
             try:
-                self.send_command("PING")
-                status = self.send_command("STATUS")
-                return status
+                for _ in range(5):
+                    try:
+                        payload = self.send_command("PING")
+                        if payload.get("kind") != "PONG":
+                            last_error = f"Unexpected response to PING: {payload.get('raw', payload)}"
+                            time.sleep(0.4)
+                            self._serial.reset_input_buffer()
+                            continue
+
+                        status = self.send_command("STATUS")
+                        if status.get("kind") != "STATUS":
+                            last_error = f"Unexpected response to STATUS: {status.get('raw', status)}"
+                            time.sleep(0.2)
+                            self._serial.reset_input_buffer()
+                            continue
+
+                        return status
+                    except Exception as exc:
+                        last_error = str(exc)
+                        time.sleep(0.5)
+
+                detail = last_error or "No valid PING/STATUS exchange received"
+                raise SerialAdapterError(
+                    f"Arduino handshake failed on {port}: {detail}. "
+                    "Make sure the Leonardo sketch is flashed and no other app is holding the port."
+                )
             except Exception:
                 self.disconnect()
                 raise

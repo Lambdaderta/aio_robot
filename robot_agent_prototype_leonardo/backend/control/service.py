@@ -8,16 +8,47 @@ from .serial_adapter import SerialAdapterError, serial_adapter
 
 
 class ControlService:
-    JOINT_LIMITS = {
+    BASE_CENTER_RAW_ANGLE = 30.0
+    RAW_JOINT_LIMITS = {
         "base": JointLimit(name="base", min_angle=0, max_angle=180, default_angle=90),
         "shoulder": JointLimit(name="shoulder", min_angle=0, max_angle=180, default_angle=90),
         "gripper": JointLimit(name="gripper", min_angle=0, max_angle=90, default_angle=45),
     }
+    LOGICAL_DEFAULTS = {
+        "base": 0.0,
+        "shoulder": 90.0,
+        "gripper": 45.0,
+    }
+    LOGICAL_PRESETS = {
+        "HOME": {"base": 0.0, "shoulder": 90.0, "gripper": 45.0},
+        "LIFT": {"base": 0.0, "shoulder": 120.0, "gripper": 45.0},
+        "PARK": {"base": 0.0, "shoulder": 70.0, "gripper": 45.0},
+        "LEFT": {"base": -35.0, "shoulder": 90.0, "gripper": 45.0},
+        "CENTER": {"base": 0.0, "shoulder": 90.0, "gripper": 45.0},
+        "RIGHT": {"base": 35.0, "shoulder": 90.0, "gripper": 45.0},
+    }
+    JOINT_COMMAND_OFFSETS = {
+        "base": 0.0,
+        "shoulder": 0.0,
+        "gripper": 0.0,
+    }
 
-    SUPPORTED_PRESETS = ("HOME", "LIFT", "CYCLE", "OPEN", "CLOSE", "WAVE", "DEMO", "PARK", "LEFT", "CENTER", "RIGHT")
+    SUPPORTED_PRESETS = tuple(LOGICAL_PRESETS.keys())
 
     def get_joint_limits(self) -> dict[str, JointLimit]:
-        return self.JOINT_LIMITS
+        limits: dict[str, JointLimit] = {}
+        for joint_name, raw_limits in self.RAW_JOINT_LIMITS.items():
+            logical_min = self._from_hardware_angle(joint_name, raw_limits.min_angle)
+            logical_max = self._from_hardware_angle(joint_name, raw_limits.max_angle)
+            low = min(logical_min, logical_max)
+            high = max(logical_min, logical_max)
+            limits[joint_name] = JointLimit(
+                name=joint_name,
+                min_angle=round(low, 2),
+                max_angle=round(high, 2),
+                default_angle=float(self.LOGICAL_DEFAULTS[joint_name]),
+            )
+        return limits
 
     def get_supported_presets(self) -> tuple[str, ...]:
         return self.SUPPORTED_PRESETS
@@ -26,12 +57,19 @@ class ControlService:
         return serial_adapter.list_ports()
 
     def validate_joint_move(self, joint_name: str, angle: float) -> tuple[bool, str | None]:
-        if joint_name not in self.JOINT_LIMITS:
+        if joint_name not in self.RAW_JOINT_LIMITS:
             return False, f"Unknown joint: {joint_name}"
-        low = self.JOINT_LIMITS[joint_name].min_angle
-        high = self.JOINT_LIMITS[joint_name].max_angle
-        if not (low <= angle <= high):
-            return False, f"Requested angle {angle} is outside allowed range [{low}, {high}]"
+        hardware_angle = self._to_hardware_angle(joint_name, angle)
+        low = self.RAW_JOINT_LIMITS[joint_name].min_angle
+        high = self.RAW_JOINT_LIMITS[joint_name].max_angle
+        if not (low <= hardware_angle <= high):
+            logical_limits = self.get_joint_limits()[joint_name]
+            return (
+                False,
+                f"Requested angle {angle} is outside calibrated range "
+                f"[{logical_limits.min_angle}, {logical_limits.max_angle}] "
+                f"for {joint_name} and would map to hardware angle {round(hardware_angle, 2)}.",
+            )
         return True, None
 
     def connect_hardware(self, port: str, baud_rate: int = 115200) -> RobotState:
@@ -97,8 +135,8 @@ class ControlService:
 
     def execute_manual_preset(self, preset_name: str) -> list[ExecutionStep]:
         normalized = preset_name.strip().upper()
-        if normalized in self.SUPPORTED_PRESETS:
-            return self.execute_action("preset", {"preset": normalized})
+        if normalized in self.LOGICAL_PRESETS:
+            return self.apply_joint_pose(self.LOGICAL_PRESETS[normalized])
         raise ValueError(f"Unsupported preset '{preset_name}'")
 
     def execute_action(self, action_name: str, parameters: dict) -> list[ExecutionStep]:
@@ -135,13 +173,14 @@ class ControlService:
 
         try:
             if action_name == "move_joint":
-                payload = serial_adapter.set_joint(parameters["joint_name"], float(parameters["angle"]))
-            elif action_name == "preset":
-                payload = serial_adapter.preset(parameters["preset"])
+                joint_name = parameters["joint_name"]
+                logical_angle = float(parameters["angle"])
+                hardware_angle = self._to_hardware_angle(joint_name, logical_angle)
+                payload = serial_adapter.set_joint(joint_name, hardware_angle)
             elif action_name == "stop":
                 payload = serial_adapter.stop()
             else:
-                raise SerialAdapterError(f"Action '{action_name}' is not supported by the hardware-only API")
+                raise SerialAdapterError(f"Action '{action_name}' is not supported by the current hardware API")
 
             add_step("serial_exchange", "completed", payload.get("raw", "Arduino responded"))
             self._apply_hardware_status(serial_adapter.get_status())
@@ -157,10 +196,10 @@ class ControlService:
     def _apply_hardware_status(self, payload: dict, state_override: RobotState | None = None) -> RobotState:
         current = state_override or app_state.get_robot_state()
         joints = current.joints.copy()
-        for joint_name in self.JOINT_LIMITS:
+        for joint_name in self.RAW_JOINT_LIMITS:
             if joint_name in payload:
                 try:
-                    joints[joint_name] = round(float(payload[joint_name]), 2)
+                    joints[joint_name] = round(self._from_hardware_angle(joint_name, float(payload[joint_name])), 2)
                 except ValueError:
                     pass
         grip_state = payload.get("grip_state") or current.gripper_state
@@ -184,6 +223,28 @@ class ControlService:
         )
         state = app_state.set_joints(joints)
         return state
+
+    def _to_hardware_angle(self, joint_name: str, logical_angle: float) -> float:
+        if joint_name == "base":
+            logical = float(logical_angle)
+            center = self.BASE_CENTER_RAW_ANGLE
+            if logical <= 0:
+                return round(center + logical * (center / 90.0), 2)
+            return round(center + logical * ((180.0 - center) / 90.0), 2)
+
+        offset = self.JOINT_COMMAND_OFFSETS.get(joint_name, 0.0)
+        return round(float(logical_angle) + offset, 2)
+
+    def _from_hardware_angle(self, joint_name: str, hardware_angle: float) -> float:
+        if joint_name == "base":
+            raw = float(hardware_angle)
+            center = self.BASE_CENTER_RAW_ANGLE
+            if raw <= center:
+                return round((raw - center) * (90.0 / center), 2)
+            return round((raw - center) * (90.0 / (180.0 - center)), 2)
+
+        offset = self.JOINT_COMMAND_OFFSETS.get(joint_name, 0.0)
+        return round(float(hardware_angle) - offset, 2)
 
 
 control_service = ControlService()

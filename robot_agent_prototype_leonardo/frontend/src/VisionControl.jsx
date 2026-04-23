@@ -12,7 +12,7 @@ import {
   VISION_WASM_URL,
 } from './vision'
 
-function VisionControl({ robotState, jointLimits, onSendPose, onControlStateChange, onTrace }) {
+function VisionControl({ robotState, jointLimits, onSendPose, onControlStateChange, onTrace, cameraCommand }) {
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
   const streamRef = useRef(null)
@@ -85,9 +85,21 @@ function VisionControl({ robotState, jointLimits, onSendPose, onControlStateChan
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    if (!cameraCommand?.action) return
+    if (cameraCommand.action === 'open') {
+      void startCamera()
+      return
+    }
+    if (cameraCommand.action === 'close') {
+      stopCamera()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraCommand?.token])
+
   const armHint = useMemo(() => {
-    if (calibrationActive) return 'Calibration captured. Move the arm to steer base and shoulder.'
-    return 'Hold the arm upright and centered, then capture the 90/90 reference.'
+    if (calibrationActive) return 'Calibration captured. Vision now follows the tracked arm and sends smoothed joint angles to the robot.'
+    return 'Hold the arm upright and centered, then capture the reference pose.'
   }, [calibrationActive])
 
   function reportError(message) {
@@ -117,9 +129,14 @@ function VisionControl({ robotState, jointLimits, onSendPose, onControlStateChan
   }
 
   async function startCamera() {
+    if (cameraStateRef.current === 'running' || cameraStateRef.current === 'loading') {
+      return
+    }
+
     try {
       setVisionError('')
       setCameraState('loading')
+      cameraStateRef.current = 'loading'
       await ensureLandmarker()
 
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -222,7 +239,6 @@ function VisionControl({ robotState, jointLimits, onSendPose, onControlStateChan
         shoulder: pose.shoulder,
       })
       lastSentPoseRef.current = pose
-      traceRef.current?.(`Vision pose sent: base ${pose.base.toFixed(1)} shoulder ${pose.shoulder.toFixed(1)}`)
     } catch (error) {
       reportError(error?.message || 'Failed to send vision pose')
     } finally {
@@ -257,7 +273,7 @@ function VisionControl({ robotState, jointLimits, onSendPose, onControlStateChan
       const result = landmarker.detectForVideo(video, now)
       const landmarks = result.landmarks?.[0]
       const mappedPose = mapArmLandmarksToPose(landmarks, calibrationRef.current, trackedSideRef.current, jointLimitsRef.current)
-      const nextPose = smoothPose(latestPoseRef.current, mappedPose)
+      const nextPose = smoothPose(latestPoseRef.current, mappedPose, 0.34)
 
       latestPoseRef.current = nextPose
       setLatestPose(nextPose)
@@ -385,7 +401,9 @@ function VisionControl({ robotState, jointLimits, onSendPose, onControlStateChan
               </div>
             </div>
 
-            <div className="vision-hint">{armHint}</div>
+            <div className="vision-hint">
+              {armHint}
+            </div>
 
             {visionError ? <div className="vision-error">{visionError}</div> : null}
           </div>
