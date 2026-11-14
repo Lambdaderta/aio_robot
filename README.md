@@ -2,6 +2,11 @@
 
 AIO is a local-first open-source agent system for robots.
 
+<p align="center">
+  <img src="docs/images/aio-arm-studio.png" width="420" alt="The physical AIO reference arm with a white 3D-printed frame, exposed servos, gripper, and cylindrical base.">
+</p>
+<p align="center"><em>Photograph of the physical AIO prototype, with AI-assisted background and surface cleanup.</em></p>
+
 The long-term goal of the project is to provide one extensible stack that can:
 
 - talk to a user through normal chat, voice, and external integrations
